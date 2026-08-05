@@ -1,0 +1,30 @@
+# Maps short disease keys (used with fetch.py --disease) to WHO GHO OData
+# indicator codes. Full indicator catalogue: https://ghoapi.azureedge.net/api/Indicator
+#
+# Each code below was queried directly against the live API and confirmed to
+# return real country-level data before being added here.
+diseases:
+  tb:
+    name: Tuberculosis
+    indicator_code: MDG_0000000020
+    indicator_name: Incidence of tuberculosis (per 100 000 population per year)
+
+  malaria:
+    name: Malaria
+    indicator_code: MALARIA_EST_INCIDENCE
+    indicator_name: Estimated malaria incidence (per 1000 population at risk)
+
+  hiv:
+    name: HIV
+    indicator_code: HIV_0000000001
+    indicator_name: Estimated number of people (all ages) living with HIV
+
+  hepatitis_b:
+    name: Hepatitis B
+    indicator_code: HEPATITIS_HBV_PREVALENCE_PER100
+    indicator_name: Prevalence of chronic hepatitis B (HBV) in the general population (%)
+
+  measles:
+    name: Measles
+    indicator_code: WHS3_62
+    indicator_name: Measles - number of reported cases
