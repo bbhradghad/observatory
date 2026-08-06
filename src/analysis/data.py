@@ -9,8 +9,21 @@ DATA_RAW_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "raw"
 
 
 def find_latest_csv(indicator_code: str) -> Optional[Path]:
-    """Return the most recently dated CSV for this indicator, if one exists."""
-    matches = sorted(DATA_RAW_DIR.glob(f"{indicator_code}_*.csv"))
+    """Return the most recently dated CSV for this indicator, if one exists.
+
+    Matches "<code>_<date>.csv" only - the date-shaped segment (a leading
+    digit) excludes "<code>_comparison_<date>.csv" (see
+    find_latest_comparison_csv), which would otherwise also match
+    "<code>_*.csv" and could sort after a same-day main fetch.
+    """
+    matches = sorted(DATA_RAW_DIR.glob(f"{indicator_code}_[0-9]*.csv"))
+    return matches[-1] if matches else None
+
+
+def find_latest_comparison_csv(indicator_code: str) -> Optional[Path]:
+    """Return the most recently dated region/global comparison CSV for this
+    indicator (see data_pipeline.get_comparison_csv), if one exists."""
+    matches = sorted(DATA_RAW_DIR.glob(f"{indicator_code}_comparison_*.csv"))
     return matches[-1] if matches else None
 
 

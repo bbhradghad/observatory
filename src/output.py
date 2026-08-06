@@ -18,16 +18,24 @@ COLUMN_MAP = {
 }
 
 
-def save_csv(df: pd.DataFrame, indicator_code: str) -> Path:
-    """Write a clean, sorted CSV and return its path."""
+def save_csv(df: pd.DataFrame, indicator_code: str, suffix: str = "") -> Path:
+    """Write a clean, sorted CSV and return its path.
+
+    suffix, if given, is inserted before the date (e.g. "comparison") so a
+    second series for the same indicator - the region/global comparison
+    fetch in data_pipeline.py - gets its own cache file instead of
+    colliding with the main country-level one.
+    """
     DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
 
     keep = [c for c in COLUMN_MAP if c in df.columns]
-    clean = df[keep].rename(columns=COLUMN_MAP)
-    clean = clean.sort_values(["country", "year"]).reset_index(drop=True)
+    clean = df[keep].rename(columns=COLUMN_MAP) if keep else pd.DataFrame(columns=["country", "year", "value"])
+    if not clean.empty:
+        clean = clean.sort_values(["country", "year"]).reset_index(drop=True)
 
     date_str = datetime.date.today().isoformat()
-    filename = f"{indicator_code}_{date_str}.csv"
+    tag = f"_{suffix}" if suffix else ""
+    filename = f"{indicator_code}{tag}_{date_str}.csv"
     path = DATA_RAW_DIR / filename
     clean.to_csv(path, index=False)
     return path

@@ -1,5 +1,13 @@
 """Render a single, self-contained HTML report - charts embedded as base64,
-no external CSS/JS, no server needed. This is the primary report interface."""
+no external CSS/JS, no server needed. This is the primary report interface.
+
+Chart-first design: each chart sits in its own card (indicator name, a
+one-line plain-language definition, a scope line, the chart, one caption) and
+carries its own meaning - the surrounding text is supporting copy, not the
+main content. The Analyst/Anomaly Reviewer's fuller narratives live in a
+collapsed "Detailed notes" <details> section at the end, out of the main
+reading path.
+"""
 
 import base64
 import html
@@ -123,6 +131,21 @@ p { margin: 0 0 12px; color: var(--ink); }
 .badge.amber { background: var(--warning-bg); color: var(--warning); }
 .badge.red { background: var(--critical-bg); color: var(--critical); }
 .badge::before { content: "\\25CF"; font-size: 9px; }
+.chart-card { margin: 40px 0; }
+.chart-card .card-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 4px;
+  color: var(--ink);
+}
+.chart-def { font-size: 14px; color: var(--ink-secondary); margin: 0 0 4px; }
+.chart-scope {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin: 0 0 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
 figure { margin: 0 0 12px; }
 img.chart {
   width: 100%;
@@ -158,6 +181,22 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--bor
 th { color: var(--ink-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
 td.severity-high { color: var(--critical); font-weight: 600; }
 td.severity-medium { color: var(--warning); font-weight: 600; }
+details.detailed-notes {
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+details.detailed-notes summary {
+  cursor: pointer;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+details.detailed-notes .notes-body { margin-top: 18px; }
+details.detailed-notes h3 { font-size: 14px; margin: 20px 0 8px; color: var(--ink); }
+details.detailed-notes h3:first-child { margin-top: 0; }
 footer {
   margin-top: 48px;
   padding-top: 20px;
@@ -168,7 +207,7 @@ footer {
 @media print {
   body { padding: 0; background: white; }
   .report { border: none; border-radius: 0; max-width: 100%; padding: 0; }
-  section { page-break-inside: avoid; }
+  section, .chart-card { page-break-inside: avoid; }
 }
 """
 
@@ -190,17 +229,56 @@ def _fmt_trend(trend: dict) -> str:
     return f"{arrow} {pct} ({trend['start_year']}–{trend['end_year']})"
 
 
+def _fmt_anomaly_change(a: dict) -> str:
+    """Compact "Change" column for the anomaly table: a % for a year-over-year
+    flag, a standard-deviation count for a baseline-deviation flag - the two
+    anomaly checks in src/analysis/anomalies.py measure different things, so
+    they get different units rather than a misleading shared one."""
+    if a["type"] == "yoy_change":
+        return f"{a['metric']:+.1f}%"
+    return f"{a['metric']:+.1f}σ vs baseline"
+
+
 def _anomaly_rows(anomalies: list) -> str:
     if not anomalies:
-        return '<tr><td colspan="4">No anomalies detected.</td></tr>'
+        return '<tr><td colspan="3">No anomalies detected.</td></tr>'
     rows = []
     for a in anomalies:
         rows.append(
-            f'<tr><td>{a["year"]}</td><td>{a["value"]}</td>'
-            f'<td class="severity-{a["severity"]}">{a["severity"].title()}</td>'
-            f'<td>{html.escape(a["reason"])}</td></tr>'
+            f'<tr><td>{a["year"]}</td><td>{html.escape(_fmt_anomaly_change(a))}</td>'
+            f'<td class="severity-{a["severity"]}">{a["severity"].title()}</td></tr>'
         )
     return "\n".join(rows)
+
+
+def _scope_line(report: dict, first_year: int, last_year: int, note: str = None) -> str:
+    base = f"Saudi Arabia ({report['country_display']}), {first_year} - {last_year}"
+    return f"{base} ({note})" if note else base
+
+
+def _comparison_note(has_region: bool, has_global: bool) -> str:
+    if has_region and has_global:
+        return None
+    missing = []
+    if not has_region:
+        missing.append("regional")
+    if not has_global:
+        missing.append("global")
+    return f"{' and '.join(missing)} comparison data not available for this indicator"
+
+
+def _chart_card(title: str, definition: str, scope: str, img_src: str, alt: str, caption: str) -> str:
+    return f"""
+  <div class="chart-card">
+    <p class="card-title">{html.escape(title)}</p>
+    <p class="chart-def">{html.escape(definition)}</p>
+    <p class="chart-scope">{html.escape(scope)}</p>
+    <figure>
+      <img class="chart" src="{img_src}" alt="{html.escape(alt)}">
+      <figcaption>{html.escape(caption)}</figcaption>
+    </figure>
+  </div>
+"""
 
 
 def render_html(
@@ -210,9 +288,13 @@ def render_html(
     trend_status: str,
     anomaly_status: str,
     overall_status: str,
+    has_region: bool,
+    has_global: bool,
 ) -> str:
     stats = report["stats"]
     latest = stats["latest"]
+    yoy_years = [p["year"] for p in stats["yoy_changes"]]
+    first_year, last_year = yoy_years[0], yoy_years[-1]
 
     stat_tiles = f"""
     <div class="stat-row">
@@ -221,6 +303,32 @@ def render_html(
       <div class="stat"><div class="label">10-year change</div><div class="value">{_fmt_trend(stats.get('trend_10y'))}</div></div>
     </div>
     """
+
+    indicator_name = report["indicator_name"]
+    trend_card = _chart_card(
+        indicator_name,
+        narrative["definition"],
+        _scope_line(report, first_year, last_year),
+        _img_data_uri(chart_paths["line_chart"]),
+        "Trend chart",
+        narrative["trend_caption"],
+    )
+    change_card = _chart_card(
+        indicator_name,
+        narrative["definition"],
+        _scope_line(report, first_year, last_year),
+        _img_data_uri(chart_paths["bar_chart"]),
+        "Year-over-year change chart",
+        narrative["change_caption"],
+    )
+    comparison_card = _chart_card(
+        indicator_name,
+        narrative["definition"],
+        _scope_line(report, first_year, last_year, _comparison_note(has_region, has_global)),
+        _img_data_uri(chart_paths["comparison_chart"]),
+        "Comparison chart",
+        narrative["comparison_caption"],
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -245,31 +353,27 @@ def render_html(
     {stat_tiles}
   </section>
 
-  <section>
-    <h2>Trend {_badge(trend_status)}</h2>
-    <figure>
-      <img class="chart" src="{_img_data_uri(chart_paths['line_chart'])}" alt="Trend chart">
-      <figcaption>{html.escape(narrative['trend_caption'])}</figcaption>
-    </figure>
-    <p>{html.escape(narrative['analyst'])}</p>
-  </section>
+  {trend_card}
+  {change_card}
+  {comparison_card}
 
   <section>
-    <h2>Year-over-year change {_badge(anomaly_status)}</h2>
-    <figure>
-      <img class="chart" src="{_img_data_uri(chart_paths['bar_chart'])}" alt="Year-over-year change chart">
-      <figcaption>{html.escape(narrative['change_caption'])}</figcaption>
-    </figure>
-  </section>
-
-  <section>
-    <h2>Anomaly review {_badge(anomaly_status)}</h2>
-    <p>{html.escape(narrative['anomaly_reviewer'])}</p>
+    <h2>Anomalies {_badge(anomaly_status)}</h2>
     <table>
-      <thead><tr><th>Year</th><th>Value</th><th>Concern</th><th>Reason</th></tr></thead>
+      <thead><tr><th>Year</th><th>Change</th><th>Severity</th></tr></thead>
       <tbody>{_anomaly_rows(report['anomalies'])}</tbody>
     </table>
   </section>
+
+  <details class="detailed-notes">
+    <summary>Detailed notes</summary>
+    <div class="notes-body">
+      <h3>Analyst interpretation</h3>
+      <p>{html.escape(narrative['analyst'])}</p>
+      <h3>Anomaly review</h3>
+      <p>{html.escape(narrative['anomaly_reviewer'])}</p>
+    </div>
+  </details>
 
   <footer>
     Source: WHO Global Health Observatory (indicator {html.escape(report['indicator_code'])}).
@@ -288,10 +392,14 @@ def save_html(
     trend_status: str,
     anomaly_status: str,
     overall_status: str,
+    has_region: bool,
+    has_global: bool,
 ) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"{report['indicator_code']}_{report['country_display']}_{report['generated_date']}"
     path = OUTPUT_DIR / f"{stem}.html"
-    content = render_html(report, narrative, chart_paths, trend_status, anomaly_status, overall_status)
+    content = render_html(
+        report, narrative, chart_paths, trend_status, anomaly_status, overall_status, has_region, has_global
+    )
     path.write_text(content, encoding="utf-8")
     return path

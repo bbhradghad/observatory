@@ -29,3 +29,18 @@ def fetch_indicator(indicator_code: str, country: Optional[str] = None) -> pd.Da
     records = response.json().get("value", [])
 
     return pd.DataFrame.from_records(records)
+
+
+def fetch_spatial_aggregate(indicator_code: str, spatial_dim_type: str, spatial_dim: str) -> pd.DataFrame:
+    """Fetch raw records for one indicator at a non-country spatial aggregation,
+    e.g. spatial_dim_type="REGION", spatial_dim="EMR" (Eastern Mediterranean),
+    or spatial_dim_type="GLOBAL", spatial_dim="GLOBAL".
+    """
+    url = f"{BASE_URL}/{indicator_code}"
+    params = {"$filter": f"SpatialDimType eq '{spatial_dim_type}' and SpatialDim eq '{spatial_dim}'"}
+
+    response = requests.get(url, params=params, timeout=TIMEOUT)
+    response.raise_for_status()
+    records = response.json().get("value", [])
+
+    return pd.DataFrame.from_records(records)

@@ -20,6 +20,15 @@
   is open rather than limited to the five-disease shortlist (`--search`,
   `--indicator`, `--add-favourite`; see "Open indicator selection" below).
   Both changes are pure Python — no new LLM calls, no change to memory usage.
+- **Chart-first redesign** — the report is now built around three
+  self-sufficient charts (trend, year-over-year change, and a new
+  region/global comparison chart) that each carry their own meaning: a
+  confidence band, anomaly markers, and the final value labelled at the line
+  end, WHO-chart style. Surrounding text was cut down to match — a one-line
+  definition and scope line per chart, one caption sentence, and a 2-3
+  sentence executive summary; the fuller Analyst/Anomaly Reviewer narratives
+  moved out of the main body into a collapsed "Detailed notes" section. See
+  "Phase 3" below.
 
 ## Project structure
 
@@ -40,12 +49,12 @@ observatory/
 │   ├── country.py          # loads config/country.yaml (the one place country is read from)
 │   ├── config.py           # loads config/indicators.yaml; resolves open --indicator codes; add_favourite()
 │   ├── catalogue.py        # full indicator catalogue: refresh/cache/search/name lookup
-│   ├── data_pipeline.py    # cache-or-fetch-or-fallback logic shared by fetch/analyze/report
-│   ├── gho_client.py       # thin wrapper around the GHO OData API
+│   ├── data_pipeline.py    # cache-or-fetch-or-fallback logic; also fetches/caches the region+global comparison series
+│   ├── gho_client.py       # thin wrapper around the GHO OData API (country fetch + region/global spatial-aggregate fetch)
 │   ├── validate.py         # dimension selection + sanity checks before saving a fetched CSV
-│   ├── output.py           # writes the clean CSV to data/raw/
+│   ├── output.py           # writes a clean CSV to data/raw/ (main series or, with a suffix, the comparison series)
 │   ├── analysis/
-│   │   ├── data.py         # loads a fetched CSV into a year/value series
+│   │   ├── data.py         # loads a fetched CSV into a year/value series; finds the latest main or comparison cache file
 │   │   ├── stats.py        # latest value, 5y/10y trend, YoY changes, min/max years
 │   │   ├── anomalies.py    # YoY-threshold and baseline z-score flags
 │   │   └── report.py       # assembles/saves the JSON + narrative .md
@@ -53,10 +62,10 @@ observatory/
 │   │   ├── llm.py          # local Ollama LLM config + readiness check
 │   │   └── crew.py         # the three agents, their tasks, and the crew
 │   └── reports/
-│       ├── charts.py       # matplotlib line + bar charts -> output/assets/*.png
+│       ├── charts.py       # matplotlib trend/YoY/comparison charts -> output/assets/*.png (endpoint labels, confidence band)
 │       ├── status.py       # green/amber/red section status, derived from anomaly flags
-│       ├── html.py         # self-contained HTML report (charts embedded as base64)
-│       └── docx.py         # same report content as a Word document
+│       ├── html.py         # self-contained HTML report: chart cards + collapsed "Detailed notes"
+│       └── docx.py         # same report content as a Word document, with a "Detailed notes" appendix page
 ├── fetch.py                # Phase 1 CLI entry point (+ --search/--indicator/--refresh-catalogue/--add-favourite)
 ├── analyze.py              # Phase 2 CLI entry point
 ├── report.py                # Phase 3 CLI entry point (full pipeline -> output/)
@@ -82,7 +91,7 @@ agents don't use tools.
 with the model pulled:**
 
 ```powershell
-ollama pull wizardlm2:7b
+ollama pull qwen2.5:3b
 ollama serve          # or just open the Ollama desktop app
 ```
 
@@ -233,6 +242,14 @@ Before saving, `src/validate.py` checks that:
 If validation fails, no file is written and the script exits with an error
 message.
 
+`report.py` additionally writes a second, smaller CSV for the comparison
+chart: `<indicator_code>_comparison_<date>.csv`, holding whatever rows exist
+for the WHO Eastern Mediterranean region (`country=EMR`) and the global
+aggregate (`country=GLOBAL`) — see "Region/global comparison" below. This
+file is exempt from the validation gate above (it can legitimately be empty)
+and `find_latest_csv()` explicitly excludes it via a date-shaped glob, so it
+can never be picked up as the main indicator's cache by mistake.
+
 ## Offline behaviour
 
 By default, every entry point (`fetch.py`, `analyze.py`, `report.py`) reuses
@@ -246,6 +263,36 @@ place, `src/data_pipeline.py`, used by all three scripts:
   clear notice naming the cached file and its date, instead of failing.
 - **API unreachable and no cache exists:** fails with a clear message; no
   file is written.
+
+## Region/global comparison
+
+`report.py` fetches two more series for the same indicator, used only by the
+comparison chart (`src/reports/charts.py`, "Phase 3" below):
+
+- WHO Eastern Mediterranean region — `SpatialDimType eq 'REGION' and
+  SpatialDim eq 'EMR'` (the region Saudi Arabia belongs to)
+- Global aggregate — `SpatialDimType eq 'GLOBAL' and SpatialDim eq 'GLOBAL'`
+
+Both live in `src/gho_client.fetch_spatial_aggregate()` and are orchestrated
+by `src/data_pipeline.get_comparison_csv()`, cached to
+`<indicator_code>_comparison_<date>.csv` (reused on later runs exactly like
+the main CSV — see "Offline behaviour" above).
+
+This path is deliberately **never fatal**, unlike the main country fetch:
+
+- A network failure on either geography, an empty response, or a `Dim1`
+  breakdown with no unambiguous combined total (`_reduce_to_total()`, a
+  non-interactive counterpart to `validate.select_dimension()` — there's no
+  user to prompt here) just drops that geography from the CSV instead of
+  raising. Many indicators genuinely have no region/global rows at all
+  (verified directly: `NTD_LEISHCNUM`, cutaneous leishmaniasis case counts,
+  returns 0 rows for both).
+- Even a fully empty result is still cached, so a repeat run doesn't re-hit
+  the API just to learn the same thing again.
+- `charts.py`'s comparison chart draws with whatever series survive — one
+  line (Saudi Arabia only) if both are missing, up to three if both exist —
+  and `html.py`/`docx.py` note whichever is missing directly in that chart's
+  scope line rather than silently showing an incomplete chart.
 
 ## Phase 2 — analysis + narrative
 
@@ -286,9 +333,10 @@ Tuned for an 8GB RAM, CPU-only Windows machine:
 
 | setting | value | why |
 |---|---|---|
-| model | `ollama/wizardlm2:7b` | small enough to run on CPU with 8GB RAM |
+| model | `ollama/qwen2.5:3b` | small enough to run on CPU with 8GB RAM |
 | `num_ctx` | 4096 | keeps the model's memory footprint small |
-| `max_tokens` (response) | 800 | bounds generation time; long enough not to truncate a multi-flag anomaly review |
+| `max_tokens` (Analyst/Anomaly Reviewer) | 800 | bounds generation time; long enough not to truncate a multi-flag anomaly review - their output length is unchanged by the Phase 3 chart-first redesign |
+| `max_tokens` (Report Writer) | 350 | tightened separately (`build_llm(max_tokens=...)`) once its output shrank to five short, fixed-length sections instead of paragraphs - see "Phase 3" below |
 | process | sequential (`Process.sequential`) | one agent runs, then the next — no extra coordination overhead |
 | memory | off (`memory=False`) | nothing needs to persist between runs |
 | embedder | none | not needed since memory is off |
@@ -317,8 +365,8 @@ saved by this point, so nothing is lost):
 - **Ollama not running:** prints `Could not reach Ollama at
   http://localhost:11434` with the exact command to start it
   (`ollama serve`).
-- **Model not pulled:** prints that `wizardlm2:7b` isn't installed, with the
-  exact `ollama pull wizardlm2:7b` command to fix it.
+- **Model not pulled:** prints that `qwen2.5:3b` isn't installed, with the
+  exact `ollama pull qwen2.5:3b` command to fix it.
 
 ## Phase 3 — polished report (HTML + Word)
 
@@ -333,40 +381,69 @@ python report.py                                  # interactive shortlist menu
 python report.py --disease tb --refresh             # bypass the local cache
 ```
 
-Steps, building on Phase 2:
+The report is **chart-first**: the charts carry the meaning, and the text
+around them is short, supporting copy, not prose. Steps, building on Phase 2:
 
-1. Get the data, compute stats/anomalies, save the analysis JSON — identical
-   to `analyze.py` (same `src/analysis` modules, same reused-CSV logic).
-2. **Generate charts (python only, `src/reports/charts.py`, matplotlib):** a
-   line chart of the indicator's value over the recent years with
-   anomaly-flagged years marked (red = high severity, amber = medium), and a
-   bar chart of year-over-year % change colored by the same severity
-   threshold `anomalies.py` uses (`YOY_PCT_THRESHOLD`, imported directly so
-   the two never drift apart). Saved as PNGs to `output/assets/`.
+1. Get the country data, compute stats/anomalies, save the analysis JSON —
+   identical to `analyze.py` (same `src/analysis` modules, same reused-CSV
+   logic). Also fetch/cache the region+global comparison series (see
+   "Region/global comparison" above).
+2. **Generate three charts (python only, `src/reports/charts.py`,
+   matplotlib):**
+   - **Trend** — the indicator's value over the recent years, with
+     anomaly-flagged years marked (red = high severity, amber = medium), a
+     shaded confidence band behind the line when the API supplied Low/High
+     bounds for that year (skipped silently otherwise), and the final point
+     labelled with its value next to the line end, WHO-chart style.
+   - **Year-over-year change** — a bar chart of % change, colored by the
+     same severity threshold `anomalies.py` uses (`YOY_PCT_THRESHOLD`,
+     imported directly so the two never drift apart). Unchanged from before.
+   - **Comparison** — Saudi Arabia plotted against the WHO Eastern
+     Mediterranean region and the global aggregate (clipped to the trend
+     chart's own year range), each line end-labelled with its value and a
+     legend naming the three series. Draws with whatever series exist -
+     never fails if region/global data is missing for an indicator.
+
+   All charts saved as PNGs to `output/assets/`. Colors follow the
+   validated categorical palette (see "Chart and report styling" below).
 3. **Derive section status (python only, `src/reports/status.py`):** green
    if no anomaly flags apply, amber if the worst applicable flag is medium
    severity, red if any is high. The Trend section's status only looks at
-   flags within the 5-year trend window; the Year-over-year change and
-   Anomaly review sections (and the executive summary) use the full flag
-   list. These ratings are computed before any agent runs and handed to the
-   Report Writer as a given fact — the model reports them, it never decides
-   or reinterprets them.
+   flags within the 5-year trend window; the Year-over-year change section
+   (and the executive summary) use the full flag list. These ratings are
+   computed before any agent runs and handed to the Report Writer as a given
+   fact — the model reports them, it never decides or reinterprets them.
 4. **Run three local agents in sequence** (`src/agents/crew.py`): the two
-   from Phase 2, plus a new **Report Writer**, which reads the analyst's
-   interpretation and anomaly review (via CrewAI's task `context=[...]`, not
-   string interpolation — see below) plus the stats JSON and the two status
-   ratings, and writes three marker-delimited sections: `EXECUTIVE SUMMARY`
-   (3-4 sentences), `TREND CAPTION`, and `CHANGE CAPTION` (one sentence each,
-   captioning the two charts). This is the *only* agent call added beyond
-   Phase 2 — still one model, still sequential.
+   from Phase 2 (Analyst, Anomaly Reviewer — unchanged, still 5-8 sentences
+   / one explanation per flag), plus a **Report Writer** with its own
+   tighter `max_tokens` (see the agent config table above), which reads the
+   analyst's interpretation and anomaly review (via CrewAI's task
+   `context=[...]`, not string interpolation — see below) plus the stats
+   JSON, the two status ratings, the indicator name, and whether
+   region/global comparison data exists, and writes five marker-delimited
+   sections: `DEFINITION` (one sentence, plain-language, paraphrasing only
+   the indicator's own name — no invented facts), `EXECUTIVE SUMMARY` (2-3
+   sentences max), `TREND CAPTION`, `CHANGE CAPTION`, and `COMPARISON
+   CAPTION` (one sentence each, captioning the three charts - the
+   comparison caption is told explicitly whether region/global data exists,
+   so it never claims a comparison that isn't there). This is the *only*
+   agent call added beyond Phase 2 — still one model, still sequential.
 5. **Save the HTML report** (`src/reports/html.py`) — a single self-contained
    file, charts embedded as base64 `data:` URIs, no external CSS/JS or
-   server needed. Status badges (green/amber/red pill, e.g. "Needs
-   attention") appear next to each section heading and color the executive
-   summary card's accent border.
+   server needed. Each chart sits in its own card, in a fixed order: the
+   indicator's official name, the one-line definition, a scope line
+   ("Saudi Arabia (KSA), \<first year\> - \<last year\>", with a note appended
+   for the comparison chart if region or global data is missing), the chart,
+   and the one caption sentence - nothing else in the card. Anomalies appear
+   as a compact three-column table (Year, Change, Severity) rather than
+   prose. The Analyst/Anomaly Reviewer's fuller text lives in a collapsed
+   `<details>` "Detailed notes" section at the end, out of the main reading
+   path. The executive summary keeps its status badge and stat tiles above
+   the chart cards.
 6. **Save the same content as a Word document** (`src/reports/docx.py`) via
-   `python-docx` — same sections, status lines, embedded chart images, and
-   anomaly table.
+   `python-docx` — same chart cards, same compact anomaly table. The
+   Analyst/Anomaly Reviewer text moves to a final "Detailed notes" appendix
+   page (`doc.add_page_break()`) instead of the main body.
 
 Both `output/*.html` and `output/*.docx` are named
 `<indicator_code>_KSA_<date>.{html,docx}` — the display name, not `SAU` (see
@@ -375,15 +452,17 @@ html.py, and docx.py all read for titles/headings/filenames).
 
 ### Report Writer prompt parsing
 
-`wizardlm2:7b` doesn't reliably emit plain `EXECUTIVE SUMMARY:` markers — in
-testing it wrapped them in markdown bold (`**EXECUTIVE SUMMARY:**`) and
-sometimes echoed the status ratings back at the end despite being told not
-to add extra sections. `_parse_report_sections()` in `src/agents/crew.py`
-tolerates leading `*`/`#` around each marker and trims any trailing
-`----------` separator or echoed "Section Status" line. If a section still
-can't be found, the executive summary falls back to the full raw text and
-the captions fall back to a generic sentence, so a formatting slip never
-breaks the HTML/DOCX build.
+`qwen2.5:3b` doesn't reliably emit plain marker lines (now `DEFINITION:`,
+`EXECUTIVE SUMMARY:`, `TREND CAPTION:`, `CHANGE CAPTION:`, `COMPARISON
+CAPTION:`) — in testing it wrapped them in markdown bold (`**EXECUTIVE
+SUMMARY:**`) and sometimes echoed the status ratings back at the end despite
+being told not to add extra sections. `_parse_report_sections()` in
+`src/agents/crew.py` tolerates leading `*`/`#` around each marker and trims
+any trailing `----------` separator or echoed "Section Status" line. If a
+section still can't be found, the executive summary falls back to the full
+raw text, the definition falls back to the indicator's own name, and the
+captions fall back to a generic sentence, so a formatting slip never breaks
+the HTML/DOCX build.
 
 ### Inter-agent context
 
@@ -398,13 +477,21 @@ to the prompt actually sent to the agent at execution time.
 ### Chart and report styling
 
 Colors follow a validated palette (checked against the `dataviz` skill's
-color-formula validator): categorical blue (`#2a78d6`) for the single data
-series, and the fixed status palette (green `#0ca30c` / amber `#fab219` /
-red `#d03b3b`) for anomaly severity and section status — so a chart's red
-dot and a report's red badge are always the same red. The HTML report
-supports light and dark mode (`prefers-color-scheme` + a `data-theme`
-override) and has `@media print` rules so it prints cleanly; chart images
-themselves stay on a white card in both modes since they're static PNGs.
+color-formula validator): categorical blue (`#2a78d6`, slot 1) for Saudi
+Arabia's own line on every chart, extended with slot 2 (orange, `#eb6834`)
+for the WHO region and slot 3 (aqua, `#1baf7a`) for the global aggregate on
+the comparison chart specifically - these three slots are the ones that
+clear the palette's all-pairs CVD/contrast gates together. The fixed status
+palette (green `#0ca30c` / amber `#fab219` / red `#d03b3b`) is used for
+anomaly severity and section status — so a chart's red dot and a report's
+red badge are always the same red, and never collide with a categorical
+series color. Per the palette's mark rules, end-point value labels stay in
+neutral ink text rather than the series color - identity comes from the
+colored end-dot beside the label, not from coloring the text itself. The
+HTML report supports light and dark mode (`prefers-color-scheme` + a
+`data-theme` override) and has `@media print` rules so it prints cleanly;
+chart images themselves stay on a white card in both modes since they're
+static PNGs.
 
 ## Verified test runs
 
@@ -491,6 +578,42 @@ Report Writer agent, but `analyze.py` (Phase 2) still called it with the old
 Fixed by making the two arguments optional: omitting them runs only the
 original two-agent Phase 2 narrative, so the Report Writer stays an opt-in
 extra call rather than a fixed cost.
+
+### Chart-first redesign
+
+Tested on two indicators chosen specifically to exercise both branches of
+the region/global comparison path - verified directly against the live API
+first (`SpatialDimType eq 'REGION'/'GLOBAL'`) before picking them:
+
+```
+python report.py --disease tb --refresh
+  -> MDG_0000000020: region 25 rows (EMR), global 25 rows, both with Low/High bounds
+  -> comparison CSV: 50 rows cached to MDG_0000000020_comparison_2026-08-06.csv
+  -> HTML opened in a browser: trend chart shows a shaded confidence band and
+     "8.4" labelled at the line end; comparison chart shows all three lines
+     (KSA/Eastern Mediterranean Region/Global), each end-labelled, with a
+     legend; every chart card reads on its own without the surrounding text
+
+python report.py --indicator NTD_LEISHCNUM --refresh
+  -> cutaneous leishmaniasis case counts: confirmed live no Low/High, no
+     region, no global data for this indicator
+  -> comparison CSV: 0 rows, still cached (re-running without --refresh
+     reused it, no network call)
+  -> HTML opened in a browser: comparison chart drew with only the KSA line
+     (no legend, single series), scope line read "SAUDI ARABIA (KSA), 2010 -
+     2024 (REGIONAL AND GLOBAL COMPARISON DATA NOT AVAILABLE FOR THIS
+     INDICATOR)", comparison caption correctly said only Saudi Arabia's data
+     was shown - the report never failed or showed a misleading comparison
+
+python report.py --disease tb   (no --refresh, immediately after the run above)
+  -> "Using cached data" and "Using cached comparison data" for both files,
+     no network calls, confirming offline re-runs work end to end
+```
+
+Also confirmed: `find_latest_csv('MDG_0000000020')` returns the main CSV, not
+the same-day `_comparison_` file - the date-shaped-glob fix in
+`src/analysis/data.py` was added after noticing the two filenames share a
+prefix and would otherwise collide once comparison caching existed.
 
 ## Notes
 

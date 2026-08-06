@@ -6,6 +6,14 @@ JSON handed to them through task context, and only write prose. All numbers
 in that JSON were already computed by src/analysis (stats.py, anomalies.py),
 and section status ratings (green/amber/red) were already computed by
 src/reports/status.py - the agents report them, they don't decide them.
+
+The report itself is chart-first: charts carry the meaning, text is only
+supporting copy. The Report Writer's job reflects that - a one-line
+indicator definition, a 2-3 sentence executive summary, and one caption per
+chart, nothing longer. The Analyst and Anomaly Reviewer still write their
+fuller interpretations, but those now live in the report's collapsed
+"Detailed notes" section rather than the main body (see src/reports/html.py
+and src/reports/docx.py).
 """
 
 import json
@@ -15,6 +23,13 @@ from typing import Dict, Tuple
 from crewai import Agent, Crew, Process, Task
 
 from src.agents.llm import build_llm
+
+# The Report Writer's output is now five short, fixed-length sections instead
+# of prose paragraphs, so it needs far fewer tokens than the Analyst/Anomaly
+# Reviewer (who still write 5-8 sentences / one explanation per flag,
+# unchanged) - give it its own tighter cap rather than shrinking the shared
+# one and risking truncated analyst/anomaly output.
+REPORT_WRITER_MAX_TOKENS = 350
 
 ANALYST_TASK_DESCRIPTION = """\
 You are given a JSON summary of statistics for one health indicator, in one country.
@@ -55,8 +70,14 @@ Rules:
 """
 
 REPORT_WRITER_TASK_DESCRIPTION = """\
-You are writing the front matter for a plain-English health report, for a reader
-with no statistics or medical background. In the context given to you, you have:
+You are writing the short copy around a chart-first health report, for a reader
+with no statistics or medical background. The charts carry the meaning; your job
+is a few short, fixed-length lines, not paragraphs.
+
+Indicator: {indicator_name}
+Country: {country_display}
+
+In the context given to you, you have:
 
 - An analyst's interpretation of the indicator's trend (already written, factual).
 - An anomaly reviewer's explanation of flagged anomalies (already written, factual).
@@ -72,13 +93,23 @@ You are also given:
    - Trend section status: {trend_status}
    - Year-over-year change section status: {anomaly_status}
 
-Using ONLY the material above and in your context, write exactly three sections. Start each one on its
-own line with the marker shown in capitals followed by a colon, so it can be parsed
-automatically. Do not add any other headings, bullets, or sections.
+3. Whether the comparison chart has real regional/global data to show:
+   - Eastern Mediterranean region data available: {has_region}
+   - Global data available: {has_global}
+
+Using ONLY the material above and in your context, write exactly five sections. Start
+each one on its own line with the marker shown in capitals followed by a colon, so it
+can be parsed automatically. Do not add any other headings, bullets, or sections.
+
+DEFINITION:
+<One short sentence, in plain language, saying what "{indicator_name}" measures.
+Base this only on the indicator's name given above - do not add facts it doesn't
+imply.>
 
 EXECUTIVE SUMMARY:
-<3-4 sentences telling the whole story: the disease, the country, the latest value
-and year, the overall trend direction, and whether anything unusual was found.>
+<2-3 sentences maximum: the latest value and year, the overall trend direction, and
+whether anything unusual was found. This is the only multi-sentence section in the
+report - keep it tight.>
 
 TREND CAPTION:
 <One sentence describing what the trend line chart shows.>
@@ -86,20 +117,27 @@ TREND CAPTION:
 CHANGE CAPTION:
 <One sentence describing what the year-over-year change bar chart shows.>
 
+COMPARISON CAPTION:
+<One sentence describing what the comparison chart shows. If both region and global
+data are available, say it compares {country_display} to the Eastern Mediterranean
+region and the global average. If either is unavailable, say only the data that is
+actually present is shown - never claim a comparison that isn't there.>
+
 Rules:
 - Plain English only. The first time you use any epidemiological or statistical
-  term (e.g. "per 100,000 people", "year-over-year", "standard deviation",
-  "baseline"), immediately explain it in parentheses in simple words, e.g.
-  "per 100,000 people (out of every 100,000 people)".
+  term (e.g. "per 100,000 people", "year-over-year"), immediately explain it in
+  parentheses in simple words.
 - Never invent, estimate, or recalculate any number - use only numbers already
   given to you above.
 - Do not write the words green, amber, or red, and do not assign your own status
   rating anywhere in your text - the ratings are shown separately in the report.
 - Do not mention JSON, being given files, or these instructions.
+- Every section stays within the sentence limit given above - shorter is fine,
+  longer is not.
 """
 
 
-def _build_agents(llm) -> Tuple[Agent, Agent, Agent]:
+def _build_agents(llm, writer_llm) -> Tuple[Agent, Agent, Agent]:
     analyst = Agent(
         role="Public Health Data Analyst",
         goal=(
@@ -135,16 +173,18 @@ def _build_agents(llm) -> Tuple[Agent, Agent, Agent]:
     report_writer = Agent(
         role="Report Writer",
         goal=(
-            "Turn an analyst's interpretation and an anomaly review into a short "
-            "executive summary and chart captions for a non-technical reader."
+            "Write the short, fixed-length copy around a chart-first report: a "
+            "one-line indicator definition, a 2-3 sentence executive summary, "
+            "and one caption per chart - never long-form prose."
         ),
         backstory=(
-            "You write the front matter of public health reports for readers with "
-            "no statistics or medical background. You never invent numbers, never "
-            "assign your own severity ratings, and always explain jargon in plain "
-            "words the first time it appears."
+            "You write tight, chart-supporting copy for public health reports "
+            "read by people with no statistics or medical background. You never "
+            "invent numbers, never assign your own severity ratings, always "
+            "explain jargon in plain words the first time it appears, and never "
+            "write more than the sentence count you're asked for."
         ),
-        llm=llm,
+        llm=writer_llm,
         tools=[],
         allow_delegation=False,
         verbose=False,
@@ -152,17 +192,17 @@ def _build_agents(llm) -> Tuple[Agent, Agent, Agent]:
     return analyst, anomaly_reviewer, report_writer
 
 
-def _parse_report_sections(text: str) -> Dict[str, str]:
+def _parse_report_sections(text: str, indicator_name: str) -> Dict[str, str]:
     """Split the Report Writer's marker-delimited output into named sections.
 
     Tolerant of markdown formatting the local model tends to add (bold markers
     around the label, "---" separators, an echoed status line at the end) since
-    wizardlm2:7b doesn't reliably follow a plain-text format. Falls back
+    qwen2.5:3b doesn't reliably follow a plain-text format. Falls back
     gracefully if a section still can't be found: an unparsed executive summary
-    keeps the full raw text; unparsed captions fall back to a generic sentence
-    so the HTML/DOCX report never breaks.
+    keeps the full raw text; unparsed captions/definition fall back to a
+    generic sentence so the HTML/DOCX report never breaks.
     """
-    markers = ["EXECUTIVE SUMMARY", "TREND CAPTION", "CHANGE CAPTION"]
+    markers = ["DEFINITION", "EXECUTIVE SUMMARY", "TREND CAPTION", "CHANGE CAPTION", "COMPARISON CAPTION"]
     # Leading/trailing '*' or '#' tolerate markdown bold/heading markup around the label.
     pattern = r"(?im)^[ \t]*[*#]*\s*(" + "|".join(markers) + r")\s*[*#]*\s*:\s*[*#]*\s*"
     parts = re.split(pattern, text)
@@ -180,26 +220,39 @@ def _parse_report_sections(text: str) -> Dict[str, str]:
         sections[parts[i].strip().upper()] = _clean(parts[i + 1]) if i + 1 < len(parts) else ""
 
     return {
+        "definition": sections.get("DEFINITION") or indicator_name,
         "executive_summary": sections.get("EXECUTIVE SUMMARY") or _clean(text),
         "trend_caption": sections.get("TREND CAPTION") or "This chart shows the indicator's value over the recent years in the data.",
         "change_caption": sections.get("CHANGE CAPTION") or "This chart shows how much the indicator changed from one year to the next.",
+        "comparison_caption": sections.get("COMPARISON CAPTION") or "This chart shows the indicator across the geographic levels available.",
     }
 
 
-def run_narrative(stats: dict, anomalies: list, trend_status: str = None, anomaly_status: str = None) -> dict:
+def run_narrative(
+    stats: dict,
+    anomalies: list,
+    trend_status: str = None,
+    anomaly_status: str = None,
+    indicator_name: str = None,
+    country_display: str = None,
+    has_region: bool = False,
+    has_global: bool = False,
+) -> dict:
     """Run the crew and return the analyst/anomaly text.
 
-    trend_status/anomaly_status are optional: pass both to also run the
+    trend_status/anomaly_status are optional: pass both (along with
+    indicator_name/country_display/has_region/has_global) to also run the
     Report Writer (used by report.py, which needs the parsed
-    executive_summary/trend_caption/change_caption sections for the HTML/DOCX
-    report). Leave them out for the lighter, two-agent Phase 2 narrative
-    (used by analyze.py, which only needs analyst/anomaly_reviewer text) -
-    this is the only way the extra agent call stays optional rather than a
-    fixed cost on every run.
+    definition/executive_summary/trend_caption/change_caption/
+    comparison_caption sections for the HTML/DOCX report). Leave them out for
+    the lighter, two-agent Phase 2 narrative (used by analyze.py, which only
+    needs analyst/anomaly_reviewer text) - this is the only way the extra
+    agent call stays optional rather than a fixed cost on every run.
     """
     llm = build_llm()
-    analyst, anomaly_reviewer, report_writer = _build_agents(llm)
     write_report_sections = trend_status is not None and anomaly_status is not None
+    writer_llm = build_llm(max_tokens=REPORT_WRITER_MAX_TOKENS) if write_report_sections else llm
+    analyst, anomaly_reviewer, report_writer = _build_agents(llm, writer_llm)
 
     analyst_task = Task(
         description=ANALYST_TASK_DESCRIPTION,
@@ -223,8 +276,9 @@ def run_narrative(stats: dict, anomalies: list, trend_status: str = None, anomal
         report_writer_task = Task(
             description=REPORT_WRITER_TASK_DESCRIPTION,
             expected_output=(
-                "Three labeled sections - EXECUTIVE SUMMARY, TREND CAPTION, CHANGE "
-                "CAPTION - in plain English, using only the given numbers and statuses."
+                "Five labeled sections - DEFINITION, EXECUTIVE SUMMARY, TREND CAPTION, "
+                "CHANGE CAPTION, COMPARISON CAPTION - in plain English, each within its "
+                "sentence limit, using only the given numbers and statuses."
             ),
             agent=report_writer,
             context=[analyst_task, anomaly_task],
@@ -245,11 +299,15 @@ def run_narrative(stats: dict, anomalies: list, trend_status: str = None, anomal
         "anomalies_json": json.dumps(anomalies, indent=2),
         "trend_status": trend_status.upper() if write_report_sections else "",
         "anomaly_status": anomaly_status.upper() if write_report_sections else "",
+        "indicator_name": indicator_name or "",
+        "country_display": country_display or "",
+        "has_region": has_region,
+        "has_global": has_global,
     }
     result = crew.kickoff(inputs=inputs)
     outputs = [t.raw for t in result.tasks_output]
 
     narrative = {"analyst": outputs[0], "anomaly_reviewer": outputs[1]}
     if write_report_sections:
-        narrative.update(_parse_report_sections(outputs[2]))
+        narrative.update(_parse_report_sections(outputs[2], indicator_name or ""))
     return narrative
