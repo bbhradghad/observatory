@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Generate a polished, non-technical health indicator report.
+"""Generate a polished, non-technical health indicator report for Saudi Arabia.
 
 Full pipeline: fetch if needed -> analyze -> agents -> charts -> HTML + DOCX,
 written to output/.
@@ -8,10 +8,14 @@ Numbers are computed ONLY in python (src/analysis). The LLM agents only turn
 those numbers into prose, and never invent or recalculate anything. Section
 status (green/amber/red) is derived from the anomaly flags in python
 (src/reports/status.py) - the agents report it, they don't decide it.
+Country is fixed to Saudi Arabia (see config/country.yaml); indicators can be
+a shortlist key or any open WHO GHO code.
 
 Examples:
-    python report.py --disease tb --country SAU
-    python report.py                                 # interactive menu
+    python report.py --disease tb
+    python report.py --indicator MDG_0000000020
+    python report.py                                 # interactive shortlist menu
+    python report.py --disease tb --refresh            # bypass the local cache
 """
 
 import argparse
@@ -23,7 +27,8 @@ from src.agents.llm import check_ollama_ready
 from src.analysis.anomalies import detect_anomalies
 from src.analysis.report import build_report, save_narrative, save_report
 from src.analysis.stats import compute_stats
-from src.config import get_disease
+from src.config import get_disease, resolve_indicator
+from src.country import load_country
 from src.reports.charts import generate_charts
 from src.reports.docx import save_docx
 from src.reports.html import save_html
@@ -32,10 +37,11 @@ from src.reports.status import derive_status
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate a polished HTML/DOCX health indicator report."
+        description="Generate a polished HTML/DOCX health indicator report for Saudi Arabia."
     )
-    parser.add_argument("--disease", help="Disease key from config/indicators.yaml (e.g. tb)")
-    parser.add_argument("--country", help="ISO3 country code (e.g. SAU)")
+    parser.add_argument("--disease", help="Disease key from config/indicators.yaml (shortlist shortcut)")
+    parser.add_argument("--indicator", help="Any WHO GHO indicator code (open catalogue)")
+    parser.add_argument("--refresh", action="store_true", help="Bypass the cached CSV and re-fetch from the API")
     return parser.parse_args()
 
 
@@ -43,28 +49,26 @@ def main():
     args = parse_args()
 
     if args.disease:
-        if not args.country:
-            print("Error: --country is required when --disease is given.")
+        try:
+            disease = get_disease(args.disease)
+        except KeyError as e:
+            print(f"Error: {e}")
             sys.exit(1)
-        disease_key, country = args.disease, args.country
+    elif args.indicator:
+        disease = resolve_indicator(args.indicator)
     else:
-        disease_key, country = interactive_select()
+        disease = get_disease(interactive_select())
 
-    try:
-        disease = get_disease(disease_key)
-    except KeyError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    df = get_series(disease, country)
+    df = get_series(disease, refresh=args.refresh)
     if df.empty:
-        print(f"No usable data for {disease['name']} in {country}.")
+        print(f"No usable data for {disease['name']}.")
         sys.exit(1)
 
     stats = compute_stats(df)
     anomalies = detect_anomalies(df)
 
-    report = build_report(disease_key, disease, country, stats, anomalies)
+    country = load_country()
+    report = build_report(disease.get("indicator_code"), disease, country, stats, anomalies)
     json_path = save_report(report)
     print(f"Saved analysis JSON to {json_path}")
 

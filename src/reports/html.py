@@ -226,14 +226,14 @@ def render_html(
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>{html.escape(report['disease'])} in {html.escape(report['country'])} - {report['generated_date']}</title>
+<title>{html.escape(report['disease'])} in {html.escape(report['country_display'])} - {report['generated_date']}</title>
 <style>{_CSS}</style>
 </head>
 <body>
 <div class="report">
   <header>
     <p class="eyebrow">Health Indicator Report</p>
-    <h1>{html.escape(report['disease'])} in {html.escape(report['country'])}</h1>
+    <h1>{html.escape(report['disease'])} in {html.escape(report['country_display'])}</h1>
     <p class="subtitle">{html.escape(report['indicator_name'])} &middot; generated {report['generated_date']}</p>
   </header>
 
@@ -290,7 +290,7 @@ def save_html(
     overall_status: str,
 ) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"{report['indicator_code']}_{report['country']}_{report['generated_date']}"
+    stem = f"{report['indicator_code']}_{report['country_display']}_{report['generated_date']}"
     path = OUTPUT_DIR / f"{stem}.html"
     content = render_html(report, narrative, chart_paths, trend_status, anomaly_status, overall_status)
     path.write_text(content, encoding="utf-8")

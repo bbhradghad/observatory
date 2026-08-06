@@ -186,11 +186,20 @@ def _parse_report_sections(text: str) -> Dict[str, str]:
     }
 
 
-def run_narrative(stats: dict, anomalies: list, trend_status: str, anomaly_status: str) -> dict:
-    """Run the three-agent crew and return the analyst/anomaly text plus the
-    parsed report sections (executive_summary, trend_caption, change_caption)."""
+def run_narrative(stats: dict, anomalies: list, trend_status: str = None, anomaly_status: str = None) -> dict:
+    """Run the crew and return the analyst/anomaly text.
+
+    trend_status/anomaly_status are optional: pass both to also run the
+    Report Writer (used by report.py, which needs the parsed
+    executive_summary/trend_caption/change_caption sections for the HTML/DOCX
+    report). Leave them out for the lighter, two-agent Phase 2 narrative
+    (used by analyze.py, which only needs analyst/anomaly_reviewer text) -
+    this is the only way the extra agent call stays optional rather than a
+    fixed cost on every run.
+    """
     llm = build_llm()
     analyst, anomaly_reviewer, report_writer = _build_agents(llm)
+    write_report_sections = trend_status is not None and anomaly_status is not None
 
     analyst_task = Task(
         description=ANALYST_TASK_DESCRIPTION,
@@ -207,19 +216,25 @@ def run_narrative(stats: dict, anomalies: list, trend_status: str, anomaly_statu
         agent=anomaly_reviewer,
     )
 
-    report_writer_task = Task(
-        description=REPORT_WRITER_TASK_DESCRIPTION,
-        expected_output=(
-            "Three labeled sections - EXECUTIVE SUMMARY, TREND CAPTION, CHANGE "
-            "CAPTION - in plain English, using only the given numbers and statuses."
-        ),
-        agent=report_writer,
-        context=[analyst_task, anomaly_task],
-    )
+    agents = [analyst, anomaly_reviewer]
+    tasks = [analyst_task, anomaly_task]
+
+    if write_report_sections:
+        report_writer_task = Task(
+            description=REPORT_WRITER_TASK_DESCRIPTION,
+            expected_output=(
+                "Three labeled sections - EXECUTIVE SUMMARY, TREND CAPTION, CHANGE "
+                "CAPTION - in plain English, using only the given numbers and statuses."
+            ),
+            agent=report_writer,
+            context=[analyst_task, anomaly_task],
+        )
+        agents.append(report_writer)
+        tasks.append(report_writer_task)
 
     crew = Crew(
-        agents=[analyst, anomaly_reviewer, report_writer],
-        tasks=[analyst_task, anomaly_task, report_writer_task],
+        agents=agents,
+        tasks=tasks,
         process=Process.sequential,
         memory=False,
         verbose=False,
@@ -228,15 +243,13 @@ def run_narrative(stats: dict, anomalies: list, trend_status: str, anomaly_statu
     inputs = {
         "stats_json": json.dumps(stats, indent=2),
         "anomalies_json": json.dumps(anomalies, indent=2),
-        "trend_status": trend_status.upper(),
-        "anomaly_status": anomaly_status.upper(),
+        "trend_status": trend_status.upper() if write_report_sections else "",
+        "anomaly_status": anomaly_status.upper() if write_report_sections else "",
     }
     result = crew.kickoff(inputs=inputs)
-    analyst_text, anomaly_text, report_writer_text = (t.raw for t in result.tasks_output)
+    outputs = [t.raw for t in result.tasks_output]
 
-    sections = _parse_report_sections(report_writer_text)
-    return {
-        "analyst": analyst_text,
-        "anomaly_reviewer": anomaly_text,
-        **sections,
-    }
+    narrative = {"analyst": outputs[0], "anomaly_reviewer": outputs[1]}
+    if write_report_sections:
+        narrative.update(_parse_report_sections(outputs[2]))
+    return narrative

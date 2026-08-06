@@ -84,7 +84,7 @@ def render_docx(
 ) -> Document:
     doc = Document()
 
-    title = doc.add_heading(f"{report['disease']} in {report['country']}", level=0)
+    title = doc.add_heading(f"{report['disease']} in {report['country_display']}", level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     subtitle = doc.add_paragraph()
@@ -134,7 +134,7 @@ def save_docx(
     overall_status: str,
 ) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"{report['indicator_code']}_{report['country']}_{report['generated_date']}"
+    stem = f"{report['indicator_code']}_{report['country_display']}_{report['generated_date']}"
     path = OUTPUT_DIR / f"{stem}.docx"
     doc = render_docx(report, narrative, chart_paths, trend_status, anomaly_status, overall_status)
     doc.save(str(path))

@@ -72,7 +72,7 @@ def _line_chart(report: dict, path: Path) -> None:
             color = _severity_color(flag["severity"])
             ax.scatter([year], [value], color=color, s=110, zorder=3, edgecolors="white", linewidths=1.5)
 
-    ax.set_title(f"{report['disease']} in {report['country']} - trend", fontsize=13, fontweight="bold", pad=12, color=COLOR_INK)
+    ax.set_title(f"{report['disease']} in {report['country_display']} - trend", fontsize=13, fontweight="bold", pad=12, color=COLOR_INK)
     ax.set_ylabel(report["indicator_name"], fontsize=9)
     ax.grid(axis="y", color=COLOR_GRID, linewidth=0.8, zorder=0)
     ax.set_xticks(years)
@@ -94,7 +94,7 @@ def _bar_chart(report: dict, path: Path) -> None:
     ax.bar(years, pct_changes, color=colors, zorder=2)
     ax.axhline(0, color=COLOR_AXIS, linewidth=0.8, zorder=1)
 
-    ax.set_title(f"{report['disease']} in {report['country']} - year-over-year change", fontsize=13, fontweight="bold", pad=12, color=COLOR_INK)
+    ax.set_title(f"{report['disease']} in {report['country_display']} - year-over-year change", fontsize=13, fontweight="bold", pad=12, color=COLOR_INK)
     ax.set_ylabel("% change from previous year", fontsize=9)
     ax.grid(axis="y", color=COLOR_GRID, linewidth=0.8, zorder=0)
     ax.set_xticks(years)
@@ -108,7 +108,7 @@ def _bar_chart(report: dict, path: Path) -> None:
 def generate_charts(report: dict) -> Dict[str, Path]:
     """Save the line and bar charts as PNGs in output/assets/, return their paths."""
     OUTPUT_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"{report['indicator_code']}_{report['country']}_{report['generated_date']}"
+    stem = f"{report['indicator_code']}_{report['country_display']}_{report['generated_date']}"
 
     line_path = OUTPUT_ASSETS_DIR / f"{stem}_line.png"
     bar_path = OUTPUT_ASSETS_DIR / f"{stem}_bar.png"

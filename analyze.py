@@ -1,14 +1,19 @@
 #!/usr/bin/env python
-"""Analyze a WHO GHO health indicator: compute stats/anomalies in python,
-then generate a plain-English narrative using local CrewAI agents (Ollama).
+"""Analyze a WHO GHO health indicator for Saudi Arabia: compute stats/anomalies
+in python, then generate a plain-English narrative using local CrewAI agents
+(Ollama).
 
 Numbers are computed ONLY in python (src/analysis). The LLM agents only
 interpret the resulting JSON - they never see raw data and never calculate
-anything themselves.
+anything themselves. Country is fixed to Saudi Arabia (see
+config/country.yaml); indicators can be a shortlist key or any open WHO GHO
+code.
 
 Examples:
-    python analyze.py --disease tb --country SAU
-    python analyze.py                                # interactive menu
+    python analyze.py --disease tb
+    python analyze.py --indicator MDG_0000000020
+    python analyze.py                                # interactive shortlist menu
+    python analyze.py --disease tb --refresh           # bypass the local cache
 """
 
 import argparse
@@ -17,21 +22,21 @@ import sys
 from src.agents.crew import run_narrative
 from src.agents.llm import check_ollama_ready
 from src.analysis.anomalies import detect_anomalies
-from src.analysis.data import find_latest_csv, load_series
+from src.analysis.data import load_series
 from src.analysis.report import build_report, save_narrative, save_report
 from src.analysis.stats import compute_stats
-from src.config import get_disease, load_diseases
-from src.gho_client import fetch_indicator
-from src.output import save_csv
-from src.validate import ValidationError, validate
+from src.config import get_disease, load_diseases, resolve_indicator
+from src.country import load_country
+from src.data_pipeline import get_indicator_csv
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Analyze a WHO GHO health indicator and generate a narrative."
+        description="Analyze a WHO GHO health indicator for Saudi Arabia and generate a narrative."
     )
-    parser.add_argument("--disease", help="Disease key from config/indicators.yaml (e.g. tb)")
-    parser.add_argument("--country", help="ISO3 country code (e.g. SAU)")
+    parser.add_argument("--disease", help="Disease key from config/indicators.yaml (shortlist shortcut)")
+    parser.add_argument("--indicator", help="Any WHO GHO indicator code (open catalogue)")
+    parser.add_argument("--refresh", action="store_true", help="Bypass the cached CSV and re-fetch from the API")
     return parser.parse_args()
 
 
@@ -39,75 +44,50 @@ def interactive_select():
     diseases = load_diseases()
     keys = sorted(diseases)
 
-    print("Available diseases:")
+    print("Shortlist (config/indicators.yaml):")
     for i, key in enumerate(keys, start=1):
         print(f"  {i}. {key} - {diseases[key]['name']}")
 
     choice = input(f"Select a disease [1-{len(keys)}]: ").strip()
     try:
-        disease_key = keys[int(choice) - 1]
+        return keys[int(choice) - 1]
     except (ValueError, IndexError):
         print("Invalid selection.")
         sys.exit(1)
 
-    country = input("Country ISO3 code (e.g. SAU, USA, EGY): ").strip()
-    if not country:
-        print("A country is required for analysis.")
-        sys.exit(1)
-    return disease_key, country
 
-
-def get_series(disease: dict, country: str):
-    """Return a (year, value) DataFrame for one country, reusing an existing
-    fetched CSV in data/raw/ if one covers it, otherwise fetching fresh."""
-    indicator_code = disease["indicator_code"]
-
-    csv_path = find_latest_csv(indicator_code)
-    if csv_path:
-        df = load_series(csv_path, country)
-        if not df.empty:
-            print(f"Using existing data: {csv_path.name}")
-            return df
-        print(f"No rows for {country} in {csv_path.name}; fetching fresh data...")
-
-    print(f"Fetching '{disease['name']}' ({indicator_code}) for {country}...")
-    raw_df = fetch_indicator(indicator_code, country)
-    try:
-        validate(raw_df)
-    except ValidationError as e:
-        print(f"Validation failed: {e}")
-        sys.exit(1)
-    save_csv(raw_df, indicator_code)
-
-    return load_series(find_latest_csv(indicator_code), country)
+def get_series(disease: dict, refresh: bool = False):
+    """Return a (year, value) DataFrame for Saudi Arabia, reusing a cached
+    CSV in data/raw/ unless refresh is True or none exists."""
+    country = load_country()
+    csv_path = get_indicator_csv(disease["indicator_code"], country["api_code"], refresh=refresh)
+    return load_series(csv_path, country["api_code"])
 
 
 def main():
     args = parse_args()
 
     if args.disease:
-        if not args.country:
-            print("Error: --country is required when --disease is given.")
+        try:
+            disease = get_disease(args.disease)
+        except KeyError as e:
+            print(f"Error: {e}")
             sys.exit(1)
-        disease_key, country = args.disease, args.country
+    elif args.indicator:
+        disease = resolve_indicator(args.indicator)
     else:
-        disease_key, country = interactive_select()
+        disease = get_disease(interactive_select())
 
-    try:
-        disease = get_disease(disease_key)
-    except KeyError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    df = get_series(disease, country)
+    df = get_series(disease, refresh=args.refresh)
     if df.empty:
-        print(f"No usable data for {disease['name']} in {country}.")
+        print(f"No usable data for {disease['name']}.")
         sys.exit(1)
 
     stats = compute_stats(df)
     anomalies = detect_anomalies(df)
 
-    report = build_report(disease_key, disease, country, stats, anomalies)
+    country = load_country()
+    report = build_report(disease.get("indicator_code"), disease, country, stats, anomalies)
     json_path = save_report(report)
     print(f"Saved analysis JSON to {json_path}")
 

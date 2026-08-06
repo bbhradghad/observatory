@@ -28,3 +28,8 @@ diseases:
     name: Measles
     indicator_code: WHS3_62
     indicator_name: Measles - number of reported cases
+
+  life_expectancy_at_birth_years:
+    name: Life expectancy at birth (years)
+    indicator_code: WHOSIS_000001
+    indicator_name: Life expectancy at birth (years)

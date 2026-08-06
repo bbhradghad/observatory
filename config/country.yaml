@@ -1,0 +1,11 @@
+# Saudi Arabia is the only country this project targets (see SETUP_NOTES.md,
+# "Country scope").
+#
+# api_code is the ISO 3166-1 alpha-3 code the WHO GHO API requires as its
+# country filter. It MUST stay "SAU" - the live WHO API returns zero rows
+# for "KSA" (verified directly; do not "fix" this by swapping it in).
+# display_name is a label only, used in report/chart titles, HTML/DOCX
+# headings, and output filenames - it is never sent to the API.
+api_code: SAU
+display_name: KSA
+full_name: Kingdom of Saudi Arabia
