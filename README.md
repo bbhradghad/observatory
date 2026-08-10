@@ -207,6 +207,3 @@ Country is fixed to Saudi Arabia. The WHO API requires the ISO code `SAU` — `K
 - The narrative layer requires a local Ollama instance with `qwen2.5:3b` installed and running; without it, `report.py` still saves the JSON and charts but stops before the text.
 - No automated test suite yet.
 
-## Author
-
-Raghad Saleh (`@bbhraghad`)
