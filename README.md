@@ -61,8 +61,3 @@ config/                              indicators.yaml (disease shortlist), countr
 data/raw/                            cached CSVs (gitignored)
 output/                              generated reports + chart assets (gitignored)
 ```
-
-## Notes
-
-- Country is fixed to Saudi Arabia. The WHO API needs `SAU` as the country code — `KSA` silently returns zero rows, so `config/country.yaml` has to keep `api_code: SAU` even though `display_name` is `KSA`.
-- Fetched CSVs and generated reports are cached/gitignored, so a fresh clone starts empty until you run `fetch.py` or `report.py`.
