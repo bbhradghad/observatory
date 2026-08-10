@@ -28,6 +28,7 @@ output/assets/*.png
 
 # OS / editor
 .DS_Store
+desktop.ini
 .vscode/
 .idea/
 .claude/

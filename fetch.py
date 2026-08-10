@@ -2,8 +2,7 @@
 """Fetch a WHO GHO health indicator for Saudi Arabia and save it as a CSV in
 data/raw/.
 
-Country is fixed - Saudi Arabia is the only target this project supports
-(see config/country.yaml and SETUP_NOTES.md, "Country scope"). Indicators are
+Indicators are
 open: search the full WHO catalogue, fetch any indicator by code, or use the
 small curated shortlist in config/indicators.yaml for quick access.
 

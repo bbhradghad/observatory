@@ -14,9 +14,6 @@ indicators can be a shortlist key or any open WHO GHO code.
 
 Examples:
     python report.py --disease tb
-    python report.py --indicator MDG_0000000020
-    python report.py                                 # interactive shortlist menu
-    python report.py --disease tb --refresh            # bypass the local cache
 """
 
 import argparse
