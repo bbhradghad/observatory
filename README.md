@@ -64,8 +64,6 @@ MODEL=ollama/qwen2.5:3b
 BASE_URL=http://localhost:11434
 ```
 
-`qwen2.5:3b` was chosen deliberately for machines without a GPU — a short 4096-token context window and a capped response length keep it usable on an 8GB RAM CPU-only setup. No API key, no per-request cost, nothing leaves your machine.
-
 ## Entry Points
 
 | Command | What it does |
