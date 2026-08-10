@@ -1,8 +1,7 @@
 # Observatory
 
-Observatory turns WHO Global Health Observatory data into a report worth reading. Point it at a health indicator for Saudi Arabia and it fetches the numbers, works out the trend and flags anything unusual, then writes a short, plain-English HTML and Word report with charts — all without an API key, and without any of your data leaving the machine.
+Observatory turns WHO Global Health Observatory data into a report worth reading. Point it at a health indicator for Saudi Arabia and it fetches the numbers, works out the trend and flags anything unusual, then writes a short, plain-English HTML and Word report with charts.
 
-The project is built around one rule: **the model never touches the numbers.** Every statistic, trend, anomaly flag, and status color in the report is computed in plain Python. A small local LLM (via Ollama) only turns those already-computed numbers into readable sentences — a one-line definition, a short summary, a caption per chart. It never calculates, estimates, or decides anything itself, which means the numbers in a report are exactly reproducible without the model in the loop at all.
 
 ## Project Overview
 
@@ -197,31 +196,6 @@ observatory/
 │
 └── output/                     generated reports + chart assets (gitignored)
     └── assets/
-```
-
-## Installation
-
-**1. Install Ollama and pull the model**
-
-```bash
-ollama pull qwen2.5:3b
-ollama serve
-```
-
-**2. Set up the Python environment**
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-## Usage
-
-```bash
-python fetch.py --disease tb        # just fetch and cache the data
-python analyze.py --disease tb      # fetch + stats + narrative (JSON + markdown)
-python report.py --disease tb       # full report: HTML + Word, with charts
 ```
 
 ## Notes on Country Scope
